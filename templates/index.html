@@ -21,7 +21,15 @@
         }
 
         #sidebar-content {
-            overflow-x: visible;
+            overflow-x: hidden;
+            overflow-y: auto;
+            scrollbar-width: none;
+        }
+
+        #sidebar-content::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+            display: none;
         }
 
         .glassmorphism {
@@ -46,10 +54,9 @@
         }
 
         .tooltip-panel {
-            position: absolute;
-            bottom: calc(100% + 0.6rem);
-            left: 50%;
-            transform: translate(-50%, 0);
+            position: fixed;
+            left: 0;
+            top: 0;
             background-color: rgba(17, 24, 39, 0.95);
             color: #d1d5db;
             padding: 0.75rem 1rem;
@@ -61,28 +68,35 @@
             border: 1px solid rgba(148, 163, 184, 0.35);
             box-shadow: 0 16px 40px rgba(15, 23, 42, 0.55);
             opacity: 0;
+            transform: translate(-50%, 0.35rem) scale(0.98);
             pointer-events: none;
             transition: opacity 0.2s ease, transform 0.2s ease;
             text-align: left;
-            z-index: 50;
+            z-index: 9999;
         }
 
         .tooltip-panel::after {
             content: '';
             position: absolute;
-            top: 100%;
             left: 50%;
             transform: translateX(-50%);
             border-width: 6px;
             border-style: solid;
+        }
+
+        .tooltip-panel[data-visible="true"] {
+            opacity: 1;
+            transform: translate(-50%, -0.35rem) scale(1);
+        }
+
+        .tooltip-panel[data-placement="top"]::after {
+            top: 100%;
             border-color: rgba(17, 24, 39, 0.95) transparent transparent transparent;
         }
 
-        .group:hover .tooltip-panel,
-        .group:focus-within .tooltip-panel {
-            opacity: 1;
-            transform: translate(-50%, -0.35rem);
-            pointer-events: auto;
+        .tooltip-panel[data-placement="bottom"]::after {
+            bottom: 100%;
+            border-color: transparent transparent rgba(17, 24, 39, 0.95) transparent;
         }
 
         .styled-input {
@@ -108,17 +122,54 @@
         }
 
         #simulation-chart-scroll {
-            overflow-x: auto;
-            overflow-y: hidden;
+            overflow: hidden;
         }
 
         #simulation-chart-scroll::-webkit-scrollbar {
-            height: 6px;
+            height: 0;
+            width: 0;
         }
 
-        #simulation-chart-scroll::-webkit-scrollbar-thumb {
-            background-color: rgba(148, 163, 184, 0.4);
+        .legend-toggle-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.85rem;
             border-radius: 9999px;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background-color: rgba(30, 41, 59, 0.55);
+            color: #e5e7eb;
+            font-size: 0.75rem;
+            font-weight: 500;
+            transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+        }
+
+        .legend-toggle-button[data-active="false"] {
+            opacity: 0.45;
+            background-color: rgba(55, 65, 81, 0.55);
+            border-color: rgba(75, 85, 99, 0.45);
+        }
+
+        .legend-toggle-button:focus-visible {
+            outline: 2px solid rgba(94, 234, 212, 0.6);
+            outline-offset: 2px;
+        }
+
+        .legend-toggle-button:hover {
+            background-color: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.4);
+        }
+
+        .legend-toggle-button[data-active="false"]:hover {
+            background-color: rgba(55, 65, 81, 0.75);
+            border-color: rgba(75, 85, 99, 0.6);
+        }
+
+        .legend-color-dot {
+            width: 0.75rem;
+            height: 0.75rem;
+            border-radius: 9999px;
+            flex-shrink: 0;
         }
     </style>
 </head>
@@ -166,7 +217,7 @@
             </div>
             <div class="mt-3 text-xs text-gray-500 flex items-center gap-2">
                 <span class="uppercase tracking-[0.2em] text-gray-500">狀態說明</span>
-                <div class="relative group inline-flex">
+                <div class="relative group inline-flex tooltip-group">
                     <span class="tooltip-icon">i</span>
                     <div class="tooltip-panel">
                         黃色：待命中。<br>藍色：訓練執行。<br>綠色：模擬進行。<br>紅色：系統錯誤。
@@ -181,7 +232,7 @@
             <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                 <div class="flex items-center gap-3">
                     <h2 class="text-3xl font-bold text-white">訓練監視器</h2>
-                    <div class="relative group inline-flex">
+                    <div class="relative group inline-flex tooltip-group">
                         <span class="tooltip-icon">i</span>
                         <div class="tooltip-panel">
                             同步顯示模型訓練過程的損失與誤差變化，協助評估是否需要調整參數。
@@ -190,7 +241,7 @@
                 </div>
                 <div class="flex items-center gap-2 text-sm text-gray-300">
                     <span class="uppercase tracking-[0.2em] text-gray-500">建議</span>
-                    <div class="relative group inline-flex">
+                    <div class="relative group inline-flex tooltip-group">
                         <span class="tooltip-icon">?</span>
                         <div class="tooltip-panel">
                             訓練透過後端批次執行，啟動後請耐心等待圖表更新。
@@ -204,7 +255,7 @@
                     <div class="flex-1 space-y-3">
                         <div class="flex items-center gap-2">
                             <p class="text-sm text-gray-200">訓練進度</p>
-                            <div class="relative group inline-flex">
+                            <div class="relative group inline-flex tooltip-group">
                                 <span class="tooltip-icon">i</span>
                                 <div class="tooltip-panel">
                                     顯示目前完成的 epoch 比例，用於估算剩餘訓練時間。
@@ -226,7 +277,7 @@
                 <div class="flex items-center justify-between gap-4 mb-4">
                     <div class="flex items-center gap-3">
                         <h3 class="text-xl font-semibold text-white">損失與誤差趨勢</h3>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 左軸為訓練與驗證損失（對數刻度），右軸顯示驗證集 RMSE%，方便同時觀察收斂速度與精度。
@@ -244,7 +295,7 @@
             <div class="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
                 <div class="flex items-center gap-3">
                     <h2 class="text-3xl font-bold text-white">即時模擬</h2>
-                    <div class="relative group inline-flex">
+                    <div class="relative group inline-flex tooltip-group">
                         <span class="tooltip-icon">i</span>
                         <div class="tooltip-panel">
                             透過歷史測試資料驅動模型推論，重建真實環境中的電池行為並同步呈現關鍵量測值。
@@ -253,7 +304,7 @@
                 </div>
                 <div class="flex items-center gap-2 text-sm text-gray-300">
                     <span class="uppercase tracking-[0.2em] text-gray-500">操作提示</span>
-                    <div class="relative group inline-flex">
+                    <div class="relative group inline-flex tooltip-group">
                         <span class="tooltip-icon">?</span>
                         <div class="tooltip-panel">
                             啟動模擬後可在左側調整更新速度與雜訊參數，以檢視模型在不同條件下的穩定性。
@@ -267,7 +318,7 @@
                     <div class="w-full flex items-center justify-between">
                         <div class="flex items-center gap-2">
                             <h3 class="text-lg font-semibold text-gray-100">預測 SOC</h3>
-                            <div class="relative group inline-flex">
+                            <div class="relative group inline-flex tooltip-group">
                                 <span class="tooltip-icon">i</span>
                                 <div class="tooltip-panel">
                                     顯示模型最新推估的 State of Charge 百分比，代表電池剩餘可用容量。
@@ -300,7 +351,7 @@
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                         <div class="flex items-center gap-2">
                             <h3 class="text-lg font-semibold text-gray-100">即時指標</h3>
-                            <div class="relative group inline-flex">
+                            <div class="relative group inline-flex tooltip-group">
                                 <span class="tooltip-icon">i</span>
                                 <div class="tooltip-panel">
                                     監控模擬過程中的主要量測值，協助判斷充放電狀態與熱管理條件。
@@ -312,7 +363,7 @@
                         <div class="rounded-2xl border border-gray-700/70 bg-gray-800/60 p-5">
                             <div class="flex items-center justify-between">
                                 <p class="text-sm font-medium text-gray-300">Voltage</p>
-                                <div class="relative group inline-flex">
+                                <div class="relative group inline-flex tooltip-group">
                                     <span class="tooltip-icon">i</span>
                                     <div class="tooltip-panel">
                                         電池端電壓 (伏特)，反映當前充放電狀態與電化學平衡。
@@ -324,7 +375,7 @@
                         <div class="rounded-2xl border border-gray-700/70 bg-gray-800/60 p-5">
                             <div class="flex items-center justify-between">
                                 <p class="text-sm font-medium text-gray-300">Current</p>
-                                <div class="relative group inline-flex">
+                                <div class="relative group inline-flex tooltip-group">
                                     <span class="tooltip-icon">i</span>
                                     <div class="tooltip-panel">
                                         電池電流 (安培)，正值代表放電、負值代表充電，可與 SOC 變化交叉比對。
@@ -336,7 +387,7 @@
                         <div class="rounded-2xl border border-gray-700/70 bg-gray-800/60 p-5">
                             <div class="flex items-center justify-between">
                                 <p class="text-sm font-medium text-gray-300">Temperature</p>
-                                <div class="relative group inline-flex">
+                                <div class="relative group inline-flex tooltip-group">
                                     <span class="tooltip-icon">i</span>
                                     <div class="tooltip-panel">
                                         電池外殼溫度 (°C)，用於檢視熱管理是否維持在安全範圍。
@@ -353,7 +404,7 @@
                 <div class="glassmorphism rounded-2xl p-6">
                     <div class="flex items-center justify-between">
                         <h3 class="text-lg font-semibold text-white">實際 SOC</h3>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 由資料集提供的標註值，可用於核對模型預測的準確性。
@@ -365,7 +416,7 @@
                 <div class="glassmorphism rounded-2xl p-6">
                     <div class="flex items-center justify-between">
                         <h3 class="text-lg font-semibold text-white">預測誤差</h3>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 預測值與實際值的差異，正值為高估、負值為低估；絕對值越小表示模型越穩定。
@@ -377,7 +428,7 @@
                 <div class="glassmorphism rounded-2xl p-6">
                     <div class="flex items-center justify-between">
                         <h3 class="text-lg font-semibold text-white">串流監測</h3>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 評估模擬串流的穩定度，若延遲上升可降低更新速度或檢查網路狀態。
@@ -398,22 +449,22 @@
             </div>
 
             <div class="glassmorphism rounded-2xl p-6 h-[28rem] flex flex-col">
-                <div class="flex items-center justify-between gap-4 mb-4">
-                    <div class="flex items-center gap-3">
-                        <h3 class="text-xl font-semibold text-white">SOC 與電壓趨勢</h3>
-                        <div class="relative group inline-flex">
-                            <span class="tooltip-icon">i</span>
-                            <div class="tooltip-panel">
-                                同步檢視預測 SOC、實際 SOC 與電壓曲線，分析模型對動態事件的反應速度。
+                <div class="flex flex-col gap-3 mb-4">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="flex items-center gap-3">
+                            <h3 class="text-xl font-semibold text-white">SOC 與電壓趨勢</h3>
+                            <div class="relative group inline-flex tooltip-group">
+                                <span class="tooltip-icon">i</span>
+                                <div class="tooltip-panel">
+                                    同步檢視預測 SOC、實際 SOC 與電壓曲線，分析模型對動態事件的反應速度。
+                                </div>
                             </div>
                         </div>
                     </div>
-                    <div class="text-xs text-gray-500 text-right">
-                        <p>藍色：預測 SOC｜琥珀色：實際 SOC｜紅色：誤差｜淺藍：電壓</p>
-                    </div>
+                    <div id="simulation-legend" class="flex flex-wrap items-center gap-2 text-xs text-gray-300"></div>
                 </div>
                 <div class="flex-1 overflow-hidden">
-                    <div id="simulation-chart-scroll" class="h-full overflow-x-auto overflow-y-hidden">
+                    <div id="simulation-chart-scroll" class="h-full">
                         <div id="simulation-chart-inner" class="relative h-full min-w-full">
                             <canvas id="simulation-chart" class="w-full h-full"></canvas>
                         </div>
@@ -430,7 +481,7 @@
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <label for="windowSize" class="text-sm text-gray-200">回看窗口 (Window Size, k)</label>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 控制一次輸入模型的歷史序列長度，數值越大代表模型能觀察更多時間脈絡。
@@ -442,7 +493,7 @@
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <label for="hiddenLayers" class="text-sm text-gray-200">隱藏層配置 (Hidden Layers)</label>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 以逗號分隔每層神經元數量，可微調模型容量；過多可能導致過擬合。
@@ -454,7 +505,7 @@
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <label for="learningRate" class="text-sm text-gray-200">學習率 (Learning Rate)</label>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 決定梯度下降的步伐大小，過大易震盪，過小則收斂緩慢。
@@ -466,7 +517,7 @@
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <label for="epochs" class="text-sm text-gray-200">訓練輪數 (Epochs)</label>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 訓練資料重複迭代的次數，可視圖表變化提早停止以避免過擬合。
@@ -489,7 +540,7 @@
                         <label for="speed-slider">速度倍率</label>
                         <span id="speed-label" class="font-semibold text-cyan-300">1.0x</span>
                     </div>
-                    <div class="relative group inline-flex">
+                    <div class="relative group inline-flex tooltip-group">
                         <span class="tooltip-icon">i</span>
                         <div class="tooltip-panel">
                             調整資料推進速度，倍率越大更新越頻繁；若出現延遲可降低此值。
@@ -500,7 +551,7 @@
                 <div class="space-y-3">
                     <div class="flex items-center justify-between text-sm text-gray-300">
                         <h4 class="font-medium">觀測雜訊</h4>
-                        <div class="relative group inline-flex">
+                        <div class="relative group inline-flex tooltip-group">
                             <span class="tooltip-icon">i</span>
                             <div class="tooltip-panel">
                                 為量測值加入對稱雜訊，可測試模型抵抗噪聲的能力；數值代表±偏移幅度。
@@ -530,7 +581,7 @@
             <button id="export-csv-btn" class="w-full bg-cyan-700 hover:bg-cyan-600 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>匯出預測資料 (CSV)</button>
             <div class="flex items-center gap-2 text-xs text-gray-500">
                 <span class="uppercase tracking-[0.2em]">提醒</span>
-                <div class="relative group inline-flex">
+                <div class="relative group inline-flex tooltip-group">
                     <span class="tooltip-icon">i</span>
                     <div class="tooltip-panel">
                         模擬啟動後系統會自動清除舊有曲線，以確保畫面與最新資料同步。

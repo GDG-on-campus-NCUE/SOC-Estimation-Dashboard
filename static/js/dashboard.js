@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sidebarContent = document.getElementById('sidebar-content');
     const simulationChartScroll = document.getElementById('simulation-chart-scroll');
     const simulationChartInner = document.getElementById('simulation-chart-inner');
+    const simulationLegend = document.getElementById('simulation-legend');
     const statusBar = {
         light: document.getElementById('status-light'),
         label: document.getElementById('status-label')
@@ -39,11 +40,119 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- UI 元件參考 ---
     let ui = {};
 
+    // --- 提示資訊控制 ---
+    let activeTooltip = null;
+
+    function initializeTooltips(scope = document) {
+        const tooltipGroups = scope.querySelectorAll('.tooltip-group');
+        tooltipGroups.forEach(group => {
+            if (group.dataset.tooltipBound === 'true') return;
+            const trigger = group.querySelector('.tooltip-icon');
+            const panel = group.querySelector('.tooltip-panel');
+            if (!trigger || !panel) return;
+
+            const showHandler = () => showTooltip(trigger, panel);
+            const hideHandler = () => hideActiveTooltip(panel);
+
+            group.addEventListener('mouseenter', showHandler);
+            group.addEventListener('mouseleave', hideHandler);
+            trigger.addEventListener('focus', showHandler);
+            trigger.addEventListener('blur', hideHandler);
+
+            group.dataset.tooltipBound = 'true';
+        });
+    }
+
+    function showTooltip(trigger, panel) {
+        if (!trigger || !panel) return;
+        if (activeTooltip && activeTooltip.panel !== panel) {
+            hideActiveTooltip(activeTooltip.panel);
+        }
+
+        activeTooltip = { trigger, panel };
+        panel.dataset.visible = 'true';
+        positionTooltip(trigger, panel);
+    }
+
+    function hideActiveTooltip(panel) {
+        const targetPanel = panel || (activeTooltip && activeTooltip.panel);
+        if (!targetPanel) return;
+
+        targetPanel.dataset.visible = 'false';
+        targetPanel.removeAttribute('data-placement');
+
+        if (activeTooltip && activeTooltip.panel === targetPanel) {
+            activeTooltip = null;
+        }
+    }
+
+    function positionTooltip(trigger, panel) {
+        if (!trigger || !panel) return;
+
+        panel.style.left = '0px';
+        panel.style.top = '0px';
+
+        const triggerRect = trigger.getBoundingClientRect();
+        const tooltipWidth = panel.offsetWidth;
+        const tooltipHeight = panel.offsetHeight;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const margin = 12;
+
+        let left = triggerRect.left + triggerRect.width / 2;
+        const halfWidth = tooltipWidth / 2;
+        if (left - halfWidth < margin) {
+            left = margin + halfWidth;
+        } else if (left + halfWidth > viewportWidth - margin) {
+            left = viewportWidth - margin - halfWidth;
+        }
+
+        let top = triggerRect.top - tooltipHeight - margin;
+        let placement = 'top';
+
+        if (top < margin) {
+            placement = 'bottom';
+            top = triggerRect.bottom + margin;
+            if (top + tooltipHeight > viewportHeight - margin) {
+                top = Math.max(margin, viewportHeight - margin - tooltipHeight);
+            }
+        } else {
+            top = Math.max(margin, top);
+        }
+
+        panel.dataset.placement = placement;
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+    }
+
+    function refreshTooltipPosition() {
+        if (!activeTooltip || activeTooltip.panel.dataset.visible !== 'true') return;
+        positionTooltip(activeTooltip.trigger, activeTooltip.panel);
+    }
+
+    window.addEventListener('scroll', refreshTooltipPosition, { passive: true });
+    window.addEventListener('resize', refreshTooltipPosition);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            hideActiveTooltip();
+        }
+    });
+
+    const mainContainer = document.querySelector('main');
+    if (mainContainer) {
+        mainContainer.addEventListener('scroll', refreshTooltipPosition, { passive: true });
+    }
+
+    if (sidebarContent) {
+        sidebarContent.addEventListener('scroll', refreshTooltipPosition, { passive: true });
+    }
+
     // =================================================================================
     // 視圖切換
     // =================================================================================
 
     function showView(viewId) {
+        hideActiveTooltip();
         views.forEach(view => view.classList.add('hidden'));
         document.getElementById(viewId)?.classList.remove('hidden');
 
@@ -62,7 +171,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateSidebar() {
         ui = {};
+        hideActiveTooltip();
         sidebarContent.innerHTML = activeView === 'training-view' ? trainingSidebarTemplate : dashboardSidebarTemplate;
+        initializeTooltips(sidebarContent);
         if (activeView === 'training-view') {
             bindTrainingControls();
         } else {
@@ -230,11 +341,51 @@ document.addEventListener('DOMContentLoaded', () => {
                     yErr: { type: 'linear', position: 'right', suggestedMin: -10, suggestedMax: 10, title: { display: true, text: '誤差 (%)', color: '#9ca3af' }, ticks: { color: '#f87171' }, grid: { drawOnChartArea: false } },
                     yV: { type: 'linear', position: 'right', offset: true, title: { display: true, text: 'Voltage (V)', color: '#9ca3af' }, ticks: { color: '#60a5fa' }, grid: { drawOnChartArea: false } }
                 },
-                plugins: { legend: { labels: { color: '#d1d5db' } } },
+                plugins: {
+                    legend: { display: false }
+                },
                 interaction: { mode: 'index', intersect: false }
             }
         });
-        adjustSimulationChartViewport(true);
+        buildSimulationLegend();
+        adjustSimulationChartViewport();
+    }
+
+    function buildSimulationLegend() {
+        if (!simulationLegend) return;
+        simulationLegend.innerHTML = '';
+        if (!simulationChart) return;
+
+        simulationChart.data.datasets.forEach((dataset, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'legend-toggle-button';
+
+            const colorDot = document.createElement('span');
+            colorDot.className = 'legend-color-dot';
+            colorDot.style.backgroundColor = dataset.borderColor;
+            button.appendChild(colorDot);
+
+            const label = document.createElement('span');
+            label.textContent = dataset.label;
+            button.appendChild(label);
+
+            const setActiveState = (isActive) => {
+                button.dataset.active = String(isActive);
+                button.setAttribute('aria-pressed', String(isActive));
+            };
+
+            setActiveState(simulationChart.isDatasetVisible(index));
+
+            button.addEventListener('click', () => {
+                const currentlyVisible = simulationChart.isDatasetVisible(index);
+                simulationChart.setDatasetVisibility(index, !currentlyVisible);
+                setActiveState(!currentlyVisible);
+                simulationChart.update('none');
+            });
+
+            simulationLegend.appendChild(button);
+        });
     }
 
     function resetSimulationView() {
@@ -250,7 +401,7 @@ document.addEventListener('DOMContentLoaded', () => {
             simulationChart.data.datasets.forEach(dataset => { dataset.data = []; });
             simulationChart.update('none');
         }
-        adjustSimulationChartViewport(true);
+        adjustSimulationChartViewport();
         toggleExportAvailability(false);
     }
 
@@ -281,7 +432,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const actualData = pointsToRender.map(p => p.actual_soc);
             const errorData = pointsToRender.map(p => p.error);
             const voltageData = pointsToRender.map(p => p.v);
-            updateChartData(simulationChart, labels, [predictedData, actualData, errorData, voltageData], { keepAll: true });
+            updateChartData(
+                simulationChart,
+                labels,
+                [predictedData, actualData, errorData, voltageData],
+                { keepAll: false, maxPoints: MAX_VISIBLE_SIMULATION_POINTS }
+            );
         }
 
         requestAnimationFrame(renderLoop);
@@ -390,28 +546,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function adjustSimulationChartViewport(forceReset = false) {
+    function adjustSimulationChartViewport() {
         if (!simulationChartInner) return;
-        if (forceReset || !simulationChart || !simulationChart.data) {
-            simulationChartInner.style.width = '100%';
-            if (simulationChartScroll) simulationChartScroll.scrollLeft = 0;
-            if (simulationChart) simulationChart.resize();
-            return;
+        simulationChartInner.style.width = '100%';
+        if (simulationChartScroll) {
+            simulationChartScroll.scrollLeft = 0;
         }
-
-        const totalPoints = simulationChart.data.labels.length;
-        if (totalPoints > MAX_VISIBLE_SIMULATION_POINTS) {
-            const widthPercent = (totalPoints / MAX_VISIBLE_SIMULATION_POINTS) * 100;
-            simulationChartInner.style.width = `${widthPercent}%`;
-            if (simulationChartScroll) {
-                simulationChartScroll.scrollLeft = simulationChartScroll.scrollWidth;
-            }
-        } else {
-            simulationChartInner.style.width = '100%';
-            if (simulationChartScroll) simulationChartScroll.scrollLeft = 0;
+        if (simulationChart) {
+            simulationChart.resize();
         }
-
-        simulationChart.resize();
     }
 
     function toggleExportAvailability(isEnabled) {
@@ -558,4 +701,5 @@ document.addEventListener('DOMContentLoaded', () => {
     showView('dashboard-view');
     initializeTrainingChart();
     initializeSimulationChart();
+    initializeTooltips(document.body);
 });
