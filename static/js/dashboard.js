@@ -7,9 +7,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- 狀態管理 ---
     let modelLoaded = false;
     let activeView = 'dashboard-view';
-    const MAX_CHART_POINTS = 200; // 圖表保留的最大點數
+    const MAX_TRAINING_POINTS = 200; // 訓練圖表最多保留的點數
+    const MAX_VISIBLE_SIMULATION_POINTS = 200; // 模擬圖表單次顯示的最大點數
 
     let simulationUpdateQueue = [];
+    let simulationHistory = [];
     let isRenderLoopRunning = false;
     let lastUpdateClientTS = null;
     let updateFrequencyEMA = null;
@@ -19,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const views = document.querySelectorAll('.view');
     const navButtons = document.querySelectorAll('.nav-button');
     const sidebarContent = document.getElementById('sidebar-content');
+    const simulationChartScroll = document.getElementById('simulation-chart-scroll');
+    const simulationChartInner = document.getElementById('simulation-chart-inner');
     const statusBar = {
         light: document.getElementById('status-light'),
         label: document.getElementById('status-label')
@@ -96,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ui.updateFrequency = document.getElementById('update-frequency');
         ui.latencyValue = document.getElementById('latency-value');
         ui.windowSizeHint = document.getElementById('window-size-hint');
+        ui.exportCsvBtn = document.getElementById('export-csv-btn');
 
         ui.startSimBtn.addEventListener('click', () => {
             if (!modelLoaded) return;
@@ -114,6 +119,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const paramInputs = [ui.speedSlider, ui.vNoise, ui.cNoise, ui.tNoise];
         paramInputs.forEach(input => input?.addEventListener('input', updateSimulationParams));
         updateSimulationParams();
+
+        ui.exportCsvBtn?.addEventListener('click', exportSimulationData);
+        toggleExportAvailability(simulationHistory.length > 0);
     }
 
     function startTraining() {
@@ -226,10 +234,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 interaction: { mode: 'index', intersect: false }
             }
         });
+        adjustSimulationChartViewport(true);
     }
 
     function resetSimulationView() {
         simulationUpdateQueue = [];
+        simulationHistory = [];
         updateDashboardMetrics(null);
         updatePerformanceIndicators(null, true);
         if (ui.windowSizeHint) {
@@ -240,6 +250,8 @@ document.addEventListener('DOMContentLoaded', () => {
             simulationChart.data.datasets.forEach(dataset => { dataset.data = []; });
             simulationChart.update('none');
         }
+        adjustSimulationChartViewport(true);
+        toggleExportAvailability(false);
     }
 
     // =================================================================================
@@ -269,7 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const actualData = pointsToRender.map(p => p.actual_soc);
             const errorData = pointsToRender.map(p => p.error);
             const voltageData = pointsToRender.map(p => p.v);
-            updateChartData(simulationChart, labels, [predictedData, actualData, errorData, voltageData]);
+            updateChartData(simulationChart, labels, [predictedData, actualData, errorData, voltageData], { keepAll: true });
         }
 
         requestAnimationFrame(renderLoop);
@@ -359,19 +371,85 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updateChartData(chart, labels, datasetsData) {
+    function updateChartData(chart, labels, datasetsData, options = {}) {
         if (!chart) return;
+        const { keepAll = false, maxPoints = MAX_TRAINING_POINTS } = options;
         for (let i = 0; i < labels.length; i++) {
             chart.data.labels.push(labels[i]);
             chart.data.datasets.forEach((dataset, idx) => {
                 dataset.data.push(datasetsData[idx][i]);
             });
-            if (chart.data.labels.length > MAX_CHART_POINTS) {
+            if (!keepAll && chart.data.labels.length > maxPoints) {
                 chart.data.labels.shift();
                 chart.data.datasets.forEach(dataset => dataset.data.shift());
             }
         }
         chart.update('quiet');
+        if (chart === simulationChart) {
+            adjustSimulationChartViewport();
+        }
+    }
+
+    function adjustSimulationChartViewport(forceReset = false) {
+        if (!simulationChartInner) return;
+        if (forceReset || !simulationChart || !simulationChart.data) {
+            simulationChartInner.style.width = '100%';
+            if (simulationChartScroll) simulationChartScroll.scrollLeft = 0;
+            if (simulationChart) simulationChart.resize();
+            return;
+        }
+
+        const totalPoints = simulationChart.data.labels.length;
+        if (totalPoints > MAX_VISIBLE_SIMULATION_POINTS) {
+            const widthPercent = (totalPoints / MAX_VISIBLE_SIMULATION_POINTS) * 100;
+            simulationChartInner.style.width = `${widthPercent}%`;
+            if (simulationChartScroll) {
+                simulationChartScroll.scrollLeft = simulationChartScroll.scrollWidth;
+            }
+        } else {
+            simulationChartInner.style.width = '100%';
+            if (simulationChartScroll) simulationChartScroll.scrollLeft = 0;
+        }
+
+        simulationChart.resize();
+    }
+
+    function toggleExportAvailability(isEnabled) {
+        if (!ui.exportCsvBtn) return;
+        ui.exportCsvBtn.disabled = !isEnabled;
+        ui.exportCsvBtn.setAttribute('aria-disabled', String(!isEnabled));
+    }
+
+    function exportSimulationData() {
+        if (!simulationHistory.length) return;
+
+        const headers = ['index', 'predicted_soc', 'actual_soc', 'error', 'voltage', 'current', 'temperature'];
+        const rows = simulationHistory.map(point => [
+            point.index,
+            formatCsvNumber(point.soc),
+            formatCsvNumber(point.actual_soc),
+            formatCsvNumber(point.error),
+            formatCsvNumber(point.v),
+            formatCsvNumber(point.c),
+            formatCsvNumber(point.t)
+        ].join(','));
+
+        const csvContent = [headers.join(','), ...rows].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const downloadLink = document.createElement('a');
+        const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0];
+        downloadLink.href = url;
+        downloadLink.download = `soc_simulation_${timestamp}.csv`;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(url);
+    }
+
+    function formatCsvNumber(value, decimals = 4) {
+        const num = Number(value);
+        return Number.isFinite(num) ? num.toFixed(decimals) : '';
     }
 
     // =================================================================================
@@ -420,25 +498,30 @@ document.addEventListener('DOMContentLoaded', () => {
             ui.stopSimBtn.disabled = false;
         }
         updatePerformanceIndicators(null, true);
+        toggleExportAvailability(false);
         startRenderLoop();
     });
 
     socket.on('simulation_update', (data) => {
         if (data && data.points && data.points.length > 0) {
             simulationUpdateQueue.push(...data.points);
+            simulationHistory.push(...data.points.map(point => ({ ...point })));
             updatePerformanceIndicators(data);
+            toggleExportAvailability(simulationHistory.length > 0);
         }
     });
 
     socket.on('simulation_stopped', () => {
         stopRenderLoop();
         updateSimulationAvailability();
+        toggleExportAvailability(simulationHistory.length > 0);
     });
 
     socket.on('simulation_error', (data) => {
         updateStatus(data.message || '模擬發生錯誤。', 'error');
         stopRenderLoop();
         updateSimulationAvailability();
+        toggleExportAvailability(simulationHistory.length > 0);
     });
 
     // =================================================================================
