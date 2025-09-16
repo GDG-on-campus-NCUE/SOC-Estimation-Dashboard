@@ -42,8 +42,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 提示資訊控制 ---
     let activeTooltip = null;
+    const tooltipHideTimers = new WeakMap();
+    const tooltipPanelsByContext = new Map();
+    const TOOLTIP_HIDE_DELAY = 120; // 延遲隱藏的時間（毫秒），提供更順暢的體驗
 
-    function initializeTooltips(scope = document) {
+    function initializeTooltips(scope = document, context = 'global') {
         const tooltipGroups = scope.querySelectorAll('.tooltip-group');
         tooltipGroups.forEach(group => {
             if (group.dataset.tooltipBound === 'true') return;
@@ -51,16 +54,62 @@ document.addEventListener('DOMContentLoaded', () => {
             const panel = group.querySelector('.tooltip-panel');
             if (!trigger || !panel) return;
 
-            const showHandler = () => showTooltip(trigger, panel);
-            const hideHandler = () => hideActiveTooltip(panel);
+            registerTooltipPanel(panel, context);
+            document.body.appendChild(panel);
+            panel.dataset.tooltipPortal = 'true';
+
+            const showHandler = () => {
+                clearTooltipHideTimer(panel);
+                showTooltip(trigger, panel);
+            };
+            const hideWithDelay = () => scheduleTooltipHide(panel);
+            const hideImmediately = () => hideActiveTooltip(panel);
 
             group.addEventListener('mouseenter', showHandler);
-            group.addEventListener('mouseleave', hideHandler);
+            group.addEventListener('mouseleave', hideWithDelay);
             trigger.addEventListener('focus', showHandler);
-            trigger.addEventListener('blur', hideHandler);
+            trigger.addEventListener('blur', hideImmediately);
+            panel.addEventListener('mouseenter', () => clearTooltipHideTimer(panel));
+            panel.addEventListener('mouseleave', hideWithDelay);
 
             group.dataset.tooltipBound = 'true';
         });
+    }
+
+    function registerTooltipPanel(panel, context) {
+        const ctx = context || 'global';
+        panel.dataset.tooltipContext = ctx;
+        if (!tooltipPanelsByContext.has(ctx)) {
+            tooltipPanelsByContext.set(ctx, new Set());
+        }
+        tooltipPanelsByContext.get(ctx).add(panel);
+    }
+
+    function cleanupTooltipsByContext(context) {
+        if (!context || !tooltipPanelsByContext.has(context)) return;
+        const panels = tooltipPanelsByContext.get(context);
+        panels.forEach(panel => {
+            hideActiveTooltip(panel);
+            clearTooltipHideTimer(panel);
+            panel.remove();
+        });
+        tooltipPanelsByContext.delete(context);
+    }
+
+    function scheduleTooltipHide(panel) {
+        if (!panel) return;
+        clearTooltipHideTimer(panel);
+        const timer = setTimeout(() => hideActiveTooltip(panel), TOOLTIP_HIDE_DELAY);
+        tooltipHideTimers.set(panel, timer);
+    }
+
+    function clearTooltipHideTimer(panel) {
+        if (!panel) return;
+        const timer = tooltipHideTimers.get(panel);
+        if (timer) {
+            clearTimeout(timer);
+            tooltipHideTimers.delete(panel);
+        }
     }
 
     function showTooltip(trigger, panel) {
@@ -78,6 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const targetPanel = panel || (activeTooltip && activeTooltip.panel);
         if (!targetPanel) return;
 
+        clearTooltipHideTimer(targetPanel);
         targetPanel.dataset.visible = 'false';
         targetPanel.removeAttribute('data-placement');
 
@@ -107,17 +157,25 @@ document.addEventListener('DOMContentLoaded', () => {
             left = viewportWidth - margin - halfWidth;
         }
 
-        let top = triggerRect.top - tooltipHeight - margin;
+        const spaceAbove = triggerRect.top - margin;
+        const spaceBelow = viewportHeight - triggerRect.bottom - margin;
+
         let placement = 'top';
+        let top;
+
+        if (spaceAbove >= tooltipHeight || spaceAbove >= spaceBelow) {
+            placement = 'top';
+            top = Math.max(margin, triggerRect.top - margin - tooltipHeight);
+        } else {
+            placement = 'bottom';
+            top = Math.min(viewportHeight - margin - tooltipHeight, triggerRect.bottom + margin);
+        }
 
         if (top < margin) {
-            placement = 'bottom';
-            top = triggerRect.bottom + margin;
-            if (top + tooltipHeight > viewportHeight - margin) {
-                top = Math.max(margin, viewportHeight - margin - tooltipHeight);
-            }
-        } else {
-            top = Math.max(margin, top);
+            top = margin;
+        }
+        if (top + tooltipHeight > viewportHeight - margin) {
+            top = Math.max(margin, viewportHeight - margin - tooltipHeight);
         }
 
         panel.dataset.placement = placement;
@@ -172,8 +230,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateSidebar() {
         ui = {};
         hideActiveTooltip();
+        cleanupTooltipsByContext('sidebar');
         sidebarContent.innerHTML = activeView === 'training-view' ? trainingSidebarTemplate : dashboardSidebarTemplate;
-        initializeTooltips(sidebarContent);
+        initializeTooltips(sidebarContent, 'sidebar');
         if (activeView === 'training-view') {
             bindTrainingControls();
         } else {

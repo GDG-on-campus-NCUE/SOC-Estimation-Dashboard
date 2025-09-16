@@ -65,6 +65,8 @@
             line-height: 1.25rem;
             width: max-content;
             max-width: 18rem;
+            max-height: calc(100vh - 2.5rem);
+            overflow-y: auto;
             border: 1px solid rgba(148, 163, 184, 0.35);
             box-shadow: 0 16px 40px rgba(15, 23, 42, 0.55);
             opacity: 0;
@@ -72,7 +74,7 @@
             pointer-events: none;
             transition: opacity 0.2s ease, transform 0.2s ease;
             text-align: left;
-            z-index: 9999;
+            z-index: 12000;
         }
 
         .tooltip-panel::after {
@@ -87,6 +89,7 @@
         .tooltip-panel[data-visible="true"] {
             opacity: 1;
             transform: translate(-50%, -0.35rem) scale(1);
+            pointer-events: auto;
         }
 
         .tooltip-panel[data-placement="top"]::after {
