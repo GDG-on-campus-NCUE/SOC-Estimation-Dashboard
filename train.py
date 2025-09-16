@@ -40,10 +40,17 @@ def main():
     """主訓練流程"""
     cfg = TrainingConfig()
     
+    # <--- GPU 修改 1: 偵測並設定 device ---
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"=========================================")
+    print(f"      將使用 '{device}' 裝置進行訓練")
+    print(f"=========================================")
+
     os.makedirs(cfg.MODEL_SAVE_DIR, exist_ok=True)
 
     # --- 1. 資料管線 ---
     # 載入完整的訓練和測試資料
+    print("正在載入並處理資料...")
     train_vct_full, train_soc_full = load_and_reshape_data(cfg.TRAIN_VCT_PATH, cfg.TRAIN_SOC_PATH)
     test_vct, test_soc = load_and_reshape_data(cfg.TEST_VCT_PATH, cfg.TEST_SOC_PATH)
 
@@ -82,6 +89,9 @@ def main():
     layer_config = [input_size] + cfg.HIDDEN_LAYERS + [output_size]
     
     model = create_bp_model(layer_config)
+    # <--- GPU 修改 2: 將模型移動到指定的 device ---
+    model.to(device)
+    
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=cfg.LEARNING_RATE)
 
@@ -98,6 +108,9 @@ def main():
         model.train()
         batch_losses = []
         for batch_X, batch_y in train_loader:
+            # <--- GPU 修改 3.1: 將訓練資料批次移動到 device ---
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+
             optimizer.zero_grad()
             outputs = model(batch_X)
             loss = criterion(outputs, batch_y)
@@ -113,11 +126,16 @@ def main():
         all_val_true = []
         with torch.no_grad():
             for batch_X_val, batch_y_val in val_loader:
+                # <--- GPU 修改 3.2: 將驗證資料批次移動到 device ---
+                batch_X_val, batch_y_val = batch_X_val.to(device), batch_y_val.to(device)
+
                 val_outputs = model(batch_X_val)
                 val_loss = criterion(val_outputs, batch_y_val)
                 val_batch_losses.append(val_loss.item())
-                all_val_preds.append(val_outputs.numpy())
-                all_val_true.append(batch_y_val.numpy())
+
+                # <--- GPU 修改 3.3: 將 GPU tensor 移回 CPU 才能轉換為 numpy ---
+                all_val_preds.append(val_outputs.cpu().numpy())
+                all_val_true.append(batch_y_val.cpu().numpy())
         
         epoch_val_loss = np.mean(val_batch_losses)
         
@@ -147,9 +165,14 @@ def main():
     # --- 5. 在最終的「測試集」上評估模型 ---
     model.eval()
     with torch.no_grad():
+        # <--- GPU 修改 3.4: 將整個測試集移動到 device 進行預測 ---
+        X_test_t = X_test_t.to(device)
+        
         predictions = model(X_test_t)
-        predictions_rescaled = predictions.numpy() * 100
-        y_test_rescaled = y_test_t.numpy() * 100
+        
+        # <--- GPU 修改 3.5: 將預測結果移回 CPU 才能轉換為 numpy ---
+        predictions_rescaled = predictions.cpu().numpy() * 100
+        y_test_rescaled = y_test_t.numpy() * 100 # y_test_t 原本就在 CPU，不需改動
         
         rmse = np.sqrt(np.mean((predictions_rescaled - y_test_rescaled)**2))
         mae = np.mean(np.abs(predictions_rescaled - y_test_rescaled))
@@ -184,7 +207,7 @@ def main():
     
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(cfg.MONITORING_PLOT_PATH)
-    plt.show()
+    # plt.show() # 在容器中執行時，通常不需要互動式顯示圖表
 
     # --- 6. 儲存模型產物 ---
     print(f"\n正在儲存模型至 '{cfg.MODEL_SAVE_DIR}' 資料夾...")
