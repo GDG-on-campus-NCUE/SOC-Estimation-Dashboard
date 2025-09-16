@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Battery SOC Estimation Dashboard</title>
+    <title>高級電池 SOC 模擬儀表板</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -21,142 +21,254 @@
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
+
+        .term-description {
+            font-size: 0.75rem;
+            color: #9ca3af;
+            margin-top: 0.25rem;
+            line-height: 1.25rem;
+        }
     </style>
 </head>
 
 <body class="bg-gray-900 text-gray-200 flex h-screen overflow-hidden">
 
     <aside class="w-80 bg-gray-800 p-6 flex flex-col shrink-0">
-        <h1 class="text-2xl font-bold text-white mb-4">SOC Estimator</h1>
-        <p class="text-sm text-gray-400 mb-6">BP Neural Network Analysis Platform</p>
+        <h1 class="text-2xl font-bold text-white mb-2">電池 SOC 儀表板</h1>
+        <p class="text-sm text-gray-400">整合模型訓練、推論與模擬的全方位控制台。</p>
+        <p class="text-sm text-gray-500 mb-6">透過即時串流掌握電壓 (Voltage)、電流 (Current)、溫度 (Temperature) 與 SOC 預測，適合做為電池管理系統 (BMS) 的人機介面原型。</p>
 
-        <nav class="flex space-x-2 mb-8" id="nav-tabs">
+        <nav class="flex space-x-2 mb-6" id="nav-tabs">
             <button data-view="dashboard-view"
-                class="nav-button flex-1 text-sm font-semibold py-2 rounded-md bg-cyan-600 text-white">Dashboard</button>
+                class="nav-button flex-1 text-sm font-semibold py-2 rounded-md bg-cyan-600 text-white">儀表板</button>
             <button data-view="training-view"
-                class="nav-button flex-1 text-sm font-semibold py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300">Training</button>
+                class="nav-button flex-1 text-sm font-semibold py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300">訓練流程</button>
         </nav>
 
-        <div id="sidebar-content" class="flex-1 overflow-y-auto">
+        <div id="sidebar-content" class="flex-1 overflow-y-auto text-sm text-gray-400 leading-relaxed">
+            <p>請選擇上方的頁籤以開始操作。儀表板提供模擬控制；訓練流程則能調整模型結構。</p>
         </div>
 
         <div class="mt-auto pt-4 border-t border-gray-700">
             <div class="flex items-center space-x-3">
                 <div id="status-light" class="w-3 h-3 rounded-full bg-yellow-400 transition-colors duration-500"></div>
-                <span id="status-label" class="text-sm text-gray-300">Initializing...</span>
+                <span id="status-label" class="text-sm text-gray-300">系統初始化中...</span>
             </div>
+            <p class="text-xs text-gray-500 mt-2">狀態指示燈說明後端目前的程序：黃色表示待命、藍色代表訓練中、綠色代表模擬進行，紅色則為錯誤。</p>
         </div>
     </aside>
 
-    <main class="flex-1 p-8 overflow-y-auto">
-        <div id="training-view" class="view hidden">
-            <h2 class="text-3xl font-bold text-white mb-6">Training Monitor</h2>
-            <div class="glassmorphism rounded-xl p-6 mb-6">
+    <main class="flex-1 p-8 overflow-y-auto space-y-10">
+        <section id="training-view" class="view hidden">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
+                <div>
+                    <h2 class="text-3xl font-bold text-white">訓練監視器</h2>
+                    <p class="term-description text-base mt-2">此區塊會同步顯示模型訓練時的損失曲線與均方根誤差 (RMSE)，協助評估模型是否收斂。</p>
+                </div>
+                <div class="text-sm text-gray-400 bg-gray-800/70 px-4 py-2 rounded-lg border border-gray-700">
+                    <p>提示：訓練採用後端批次排程，啟動後請耐心等待圖表更新。</p>
+                </div>
+            </div>
+
+            <div class="glassmorphism rounded-xl p-6 mb-6 space-y-4">
                 <div class="flex justify-between items-center">
                     <div class="flex-1">
-                        <p class="text-gray-400 text-sm">Progress</p>
-                        <div class="w-full bg-gray-700 rounded-full h-2.5 mt-2">
+                        <p class="text-sm text-gray-300">訓練進度</p>
+                        <p class="term-description">顯示目前已完成的 epoch 比例，協助掌握訓練剩餘時間。</p>
+                        <div class="w-full bg-gray-700 rounded-full h-2.5 mt-3">
                             <div id="progress-bar" class="bg-cyan-500 h-2.5 rounded-full" style="width: 0%"></div>
                         </div>
                     </div>
                     <div id="epoch-counter" class="ml-6 text-right">
-                        <p class="text-gray-400 text-sm">Epoch</p>
+                        <p class="text-sm text-gray-300">Epoch</p>
                         <p class="text-white font-bold text-lg">0 / 0</p>
                     </div>
                 </div>
             </div>
-            <div class="h-[60vh] glassmorphism rounded-xl p-6">
-                <canvas id="training-chart"></canvas>
-            </div>
-        </div>
 
-        <div id="dashboard-view" class="view">
-            <h2 class="text-3xl font-bold text-white mb-6">Real-time Simulation</h2>
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div class="lg:col-span-1 glassmorphism rounded-2xl p-6 flex flex-col items-center justify-center">
-                    <h3 class="text-xl font-semibold text-gray-400 mb-4">Estimated SOC</h3>
-                    <div class="relative w-48 h-48">
-                        <svg class="w-full h-full" viewBox="0 0 100 100">
-                            <circle class="text-gray-700" stroke-width="8" stroke="currentColor" fill="transparent"
-                                r="45" cx="50" cy="50" />
-                            <circle id="soc-progress-circle" class="text-cyan-400 transition-all duration-500"
-                                stroke-width="8" stroke-linecap="round" stroke="currentColor" fill="transparent" r="45"
-                                cx="50" cy="50" style="transform: rotate(-90deg); transform-origin: 50% 50%;" />
-                        </svg>
-                        <div class="absolute inset-0 flex items-center justify-center">
-                            <span id="soc-value" class="text-5xl font-bold text-white">--</span>
-                            <span class="text-2xl font-semibold text-gray-400 ml-1">%</span>
-                        </div>
+            <div class="glassmorphism rounded-xl p-6 h-[60vh] flex flex-col">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-xl font-semibold text-white">損失與誤差趨勢</h3>
+                        <p class="term-description">左側座標軸為訓練/驗證損失 (對數刻度)，右側座標軸顯示驗證集 RMSE (%)，便於同時觀察收斂速度與預測精度。</p>
                     </div>
                 </div>
-                <div class="lg:col-span-2 glassmorphism rounded-2xl p-6 grid grid-cols-3 gap-6 text-center">
+                <div class="flex-1">
+                    <canvas id="training-chart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section id="dashboard-view" class="view">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+                <div>
+                    <h2 class="text-3xl font-bold text-white">即時模擬</h2>
+                    <p class="term-description text-base mt-2">透過歷史測試資料驅動模型推論，模擬真實運轉時的電池行為並呈現對應的電壓/電流/溫度觀測值。</p>
+                </div>
+                <div class="text-sm text-gray-400 bg-gray-800/70 px-4 py-2 rounded-lg border border-gray-700">
+                    <p>建議：啟動模擬後可透過左側控制區調整更新速度與雜訊，觀察模型的穩健性。</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div class="glassmorphism rounded-2xl p-6 flex flex-col items-center text-center space-y-4">
                     <div>
-                        <h3 class="text-lg text-gray-400">Voltage</h3>
+                        <h3 class="text-xl font-semibold text-gray-100">預測 SOC</h3>
+                        <p class="term-description">此儀表顯示模型最新預估的 State of Charge (SOC) 百分比，對應電池剩餘可用容量。</p>
+                    </div>
+                    <div class="relative w-48 h-48">
+                        <svg class="w-full h-full" viewBox="0 0 100 100">
+                            <circle class="text-gray-700" stroke-width="8" stroke="currentColor" fill="transparent" r="45" cx="50" cy="50" />
+                            <circle id="soc-progress-circle" class="text-cyan-400 transition-all duration-500" stroke-width="8"
+                                stroke-linecap="round" stroke="currentColor" fill="transparent" r="45" cx="50" cy="50"
+                                style="transform: rotate(-90deg); transform-origin: 50% 50%;" />
+                        </svg>
+                        <div class="absolute inset-0 flex items-end justify-center pb-4">
+                            <div class="flex items-end space-x-1">
+                                <span id="soc-value" class="text-5xl font-bold text-white">--</span>
+                                <span class="text-2xl font-semibold text-gray-400">%</span>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-400">模型輸入窗口：<span id="window-size-hint" class="font-semibold text-gray-200">--</span> 筆資料</p>
+                    <p class="text-xs text-gray-500">解讀建議：低於 20% 代表容量即將耗盡，應考慮充電；高於 80% 則可視為充足。</p>
+                </div>
+
+                <div class="glassmorphism rounded-2xl p-6 xl:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6 text-center">
+                    <div>
+                        <h3 class="text-lg text-gray-200">Voltage</h3>
+                        <p class="term-description">電池端電壓 (伏特)，反映當前充放電狀態；加入雜訊後可模擬儀表量測誤差。</p>
                         <p class="text-4xl font-semibold text-white mt-2"><span id="v-value">-.--</span> V</p>
                     </div>
                     <div>
-                        <h3 class="text-lg text-gray-400">Current</h3>
+                        <h3 class="text-lg text-gray-200">Current</h3>
+                        <p class="term-description">電池電流 (安培)，正值多半代表放電、負值代表充電，可佐證 SOC 的變化方向。</p>
                         <p class="text-4xl font-semibold text-white mt-2"><span id="c-value">-.--</span> A</p>
                     </div>
                     <div>
-                        <h3 class="text-lg text-gray-400">Temperature</h3>
+                        <h3 class="text-lg text-gray-200">Temperature</h3>
+                        <p class="term-description">電池外殼溫度 (°C)，協助監測熱管理與安全條件，亦可作為模型輸入特徵之一。</p>
                         <p class="text-4xl font-semibold text-white mt-2"><span id="t-value">-.--</span> °C</p>
                     </div>
                 </div>
-                <div class="lg:col-span-3 h-80 glassmorphism rounded-xl p-6">
-                    <canvas id="simulation-chart"></canvas>
+
+                <div class="xl:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="glassmorphism rounded-xl p-5">
+                        <h3 class="text-lg font-semibold text-white">實際 SOC</h3>
+                        <p class="term-description">從測試資料集中讀取的標註值，可用來比對模型預測是否偏高或偏低。</p>
+                        <p class="text-3xl font-bold text-cyan-300 mt-4"><span id="actual-soc-value">--</span>%</p>
+                    </div>
+                    <div class="glassmorphism rounded-xl p-5">
+                        <h3 class="text-lg font-semibold text-white">預測誤差</h3>
+                        <p class="term-description">顯示預測與標註間的差值，正值代表高估、負值代表低估；絕對值越小越理想。</p>
+                        <p class="text-3xl font-bold mt-4" id="error-value">--</p>
+                    </div>
+                    <div class="glassmorphism rounded-xl p-5 space-y-3">
+                        <div>
+                            <h3 class="text-lg font-semibold text-white">資料串流狀態</h3>
+                            <p class="term-description">更新頻率代表圖表每秒接收的批次次數，延遲則可用來判斷即時性。</p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3 text-center">
+                            <div>
+                                <p class="text-xs text-gray-400">更新頻率</p>
+                                <p class="text-2xl font-semibold text-white" id="update-frequency">--</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-400">估計延遲</p>
+                                <p class="text-2xl font-semibold text-white" id="latency-value">--</p>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-500">若延遲持續上升，建議降低更新速度或檢查網路環境。</p>
+                    </div>
+                </div>
+
+                <div class="xl:col-span-3 glassmorphism rounded-xl p-6 h-96 flex flex-col">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="text-xl font-semibold text-white">SOC 與電壓趨勢</h3>
+                            <p class="term-description">圖中同時顯示預測 SOC、實際 SOC 以及電壓曲線，可用於分析模型對動態事件的反應速度。</p>
+                        </div>
+                        <div class="text-xs text-gray-500 text-right">
+                            <p>圖例：藍色為預測值、琥珀色為標註值、紅色為誤差、淺藍為電壓。</p>
+                        </div>
+                    </div>
+                    <div class="flex-1">
+                        <canvas id="simulation-chart"></canvas>
+                    </div>
                 </div>
             </div>
-        </div>
+        </section>
     </main>
 
     <template id="training-sidebar-template">
-        <h3 class="text-lg font-semibold text-gray-300 mb-4">Training Parameters</h3>
-        <div class="space-y-4">
-            <div><label for="windowSize" class="text-sm text-gray-400">Window Size (k)</label><input id="windowSize"
-                    type="number" value="5" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1"></div>
-            <div><label for="hiddenLayers" class="text-sm text-gray-400">Hidden Layers</label><input id="hiddenLayers"
-                    type="text" value="64, 32" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1"></div>
-            <div><label for="learningRate" class="text-sm text-gray-400">Learning Rate</label><input id="learningRate"
-                    type="number" step="0.0001" value="0.001" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1">
+        <h3 class="text-lg font-semibold text-gray-200 mb-4">訓練參數設定</h3>
+        <div class="space-y-5">
+            <div>
+                <label for="windowSize" class="text-sm text-gray-200">回看窗口 (Window Size, k)</label>
+                <p class="term-description">控制一次輸入模型的歷史序列長度，值越大代表模型能觀察到更多時間脈絡。</p>
+                <input id="windowSize" type="number" value="5" min="2" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1">
             </div>
-            <div><label for="epochs" class="text-sm text-gray-400">Epochs</label><input id="epochs" type="number"
-                    value="1000" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1"></div>
+            <div>
+                <label for="hiddenLayers" class="text-sm text-gray-200">隱藏層配置 (Hidden Layers)</label>
+                <p class="term-description">以逗號分隔每層神經元數量，可微調模型容量；過多可能導致過擬合。</p>
+                <input id="hiddenLayers" type="text" value="64, 32" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1">
+            </div>
+            <div>
+                <label for="learningRate" class="text-sm text-gray-200">學習率 (Learning Rate)</label>
+                <p class="term-description">梯度下降的步伐大小，過大可能震盪，過小則收斂緩慢。</p>
+                <input id="learningRate" type="number" step="0.0001" value="0.001" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1">
+            </div>
+            <div>
+                <label for="epochs" class="text-sm text-gray-200">訓練輪數 (Epochs)</label>
+                <p class="term-description">資料重複訓練的次數，建議搭配圖表觀察是否提早停止以避免過擬合。</p>
+                <input id="epochs" type="number" value="1000" class="w-full bg-gray-700 text-white rounded-md p-2 mt-1">
+            </div>
         </div>
         <button id="retrain-btn"
-            class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 rounded-lg transition-all mt-8">Re-train
-            Model</button>
+            class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 rounded-lg transition-all mt-8">重新訓練模型</button>
     </template>
 
     <template id="dashboard-sidebar-template">
-        <h3 class="text-lg font-semibold text-gray-300 mb-4">Simulation Control</h3>
+        <h3 class="text-lg font-semibold text-gray-200 mb-4">模擬控制</h3>
         <div class="space-y-6">
             <div>
-                <div class="flex justify-between items-center text-sm text-gray-400">
-                    <label for="speed-slider">Speed</label>
+                <div class="flex justify-between items-center text-sm text-gray-300">
+                    <label for="speed-slider">速度倍率</label>
                     <span id="speed-label">1.0x</span>
                 </div>
-                <input id="speed-slider" type="range" min="0.1" max="2" step="0.1" value="1"
+                <p class="term-description">調整資料推進速度，倍率越大則更新越頻繁；若出現延遲可降低此值。</p>
+                <input id="speed-slider" type="range" min="0.5" max="3" step="0.1" value="1"
                     class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
             </div>
             <div>
-                <h4 class="text-sm text-gray-400 mb-2">Observation Noise</h4>
-                <div class="space-y-3">
-                    <div><label class="text-xs">Voltage Noise (±V)</label><input id="v-noise" type="number" value="0"
-                            step="0.01" class="w-full bg-gray-700 text-white text-xs rounded-md p-1 mt-1"></div>
-                    <div><label class="text-xs">Current Noise (±A)</label><input id="c-noise" type="number" value="0"
-                            step="0.01" class="w-full bg-gray-700 text-white text-xs rounded-md p-1 mt-1"></div>
-                    <div><label class="text-xs">Temp. Noise (±°C)</label><input id="t-noise" type="number" value="0"
-                            step="0.1" class="w-full bg-gray-700 text-white text-xs rounded-md p-1 mt-1"></div>
+                <h4 class="text-sm text-gray-300 mb-2">觀測雜訊</h4>
+                <p class="term-description">為量測值加入對稱雜訊，可測試模型抵抗噪聲的能力，範圍代表±偏移幅度。</p>
+                <div class="space-y-3 mt-3">
+                    <div>
+                        <label class="text-xs text-gray-300">Voltage Noise (±V)</label>
+                        <input id="v-noise" type="number" value="0" step="0.01"
+                            class="w-full bg-gray-700 text-white text-xs rounded-md p-1 mt-1">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-300">Current Noise (±A)</label>
+                        <input id="c-noise" type="number" value="0" step="0.01"
+                            class="w-full bg-gray-700 text-white text-xs rounded-md p-1 mt-1">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-300">Temp. Noise (±°C)</label>
+                        <input id="t-noise" type="number" value="0" step="0.1"
+                            class="w-full bg-gray-700 text-white text-xs rounded-md p-1 mt-1">
+                    </div>
                 </div>
             </div>
         </div>
         <div id="dashboard-buttons" class="mt-8 flex space-x-4">
             <button id="start-sim-btn"
-                class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition-colors">Start</button>
+                class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition-colors">開始模擬</button>
             <button id="stop-sim-btn"
-                class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition-colors">Stop</button>
+                class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition-colors">停止</button>
         </div>
+        <p class="term-description mt-4">模擬啟動後系統會自動清除舊有曲線，以確保預覽圖即時同步。</p>
     </template>
 
     <script src="/static/js/dashboard.js"></script>
