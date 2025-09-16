@@ -1,0 +1,11 @@
+# requirements.txt (Web App Version)
+torch
+pandas
+numpy
+scikit-learn
+joblib
+Flask
+Flask-SocketIO
+tqdm
+matplotlib
+google-cloud-storage
