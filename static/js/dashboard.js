@@ -8,10 +8,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let modelLoaded = false;
     let activeView = 'dashboard-view';
     const MAX_TRAINING_POINTS = 200; // 訓練圖表最多保留的點數
-    const MAX_VISIBLE_SIMULATION_POINTS = 200; // 模擬圖表單次顯示的最大點數
+    const MAX_VISIBLE_SIMULATION_POINTS = 200; // 模擬圖表視窗內的參考顯示點數上限
 
     let simulationUpdateQueue = [];
     let simulationHistory = [];
+    let trainingHistory = [];
     let isRenderLoopRunning = false;
     let lastUpdateClientTS = null;
     let updateFrequencyEMA = null;
@@ -24,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const simulationChartScroll = document.getElementById('simulation-chart-scroll');
     const simulationChartInner = document.getElementById('simulation-chart-inner');
     const simulationLegend = document.getElementById('simulation-legend');
+    const trainingExportButton = document.getElementById('export-training-csv-btn');
     const statusBar = {
         light: document.getElementById('status-light'),
         label: document.getElementById('status-label')
@@ -250,6 +252,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function bindTrainingControls() {
         ui.retrainBtn = document.getElementById('retrain-btn');
         ui.retrainBtn.addEventListener('click', startTraining);
+        if (trainingExportButton) {
+            ui.trainingExportBtn = trainingExportButton;
+            toggleExportAvailability(trainingHistory.length > 0, trainingExportButton);
+        }
     }
 
     function bindDashboardControls() {
@@ -334,6 +340,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!document.getElementById('training-chart')) return;
         if (trainingChart) trainingChart.destroy();
         const ctx = document.getElementById('training-chart').getContext('2d');
+        trainingHistory = [];
+        toggleExportAvailability(false, trainingExportButton);
         trainingChart = new Chart(ctx, {
             type: 'line',
             data: {
@@ -495,7 +503,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 simulationChart,
                 labels,
                 [predictedData, actualData, errorData, voltageData],
-                { keepAll: false, maxPoints: MAX_VISIBLE_SIMULATION_POINTS }
+                { keepAll: true }
             );
         }
 
@@ -607,19 +615,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function adjustSimulationChartViewport() {
         if (!simulationChartInner) return;
-        simulationChartInner.style.width = '100%';
-        if (simulationChartScroll) {
-            simulationChartScroll.scrollLeft = 0;
-        }
+
+        const totalPoints = simulationChart?.data.labels.length || 0;
+        const visibleLimit = Math.max(1, MAX_VISIBLE_SIMULATION_POINTS);
+        const widthRatio = totalPoints > visibleLimit ? totalPoints / visibleLimit : 1;
+        const previousScrollLeft = simulationChartScroll ? simulationChartScroll.scrollLeft : 0;
+        const isNearRightEdge = simulationChartScroll
+            ? (simulationChartScroll.scrollLeft + simulationChartScroll.clientWidth) >= (simulationChartScroll.scrollWidth - 4)
+            : false;
+
+        simulationChartInner.style.width = `${Math.max(1, widthRatio) * 100}%`;
+
         if (simulationChart) {
             simulationChart.resize();
         }
+
+        if (simulationChartScroll) {
+            const maxScrollLeft = Math.max(0, simulationChartScroll.scrollWidth - simulationChartScroll.clientWidth);
+            if (isNearRightEdge) {
+                simulationChartScroll.scrollLeft = maxScrollLeft;
+            } else {
+                simulationChartScroll.scrollLeft = Math.min(previousScrollLeft, maxScrollLeft);
+            }
+        }
     }
 
-    function toggleExportAvailability(isEnabled) {
-        if (!ui.exportCsvBtn) return;
-        ui.exportCsvBtn.disabled = !isEnabled;
-        ui.exportCsvBtn.setAttribute('aria-disabled', String(!isEnabled));
+    function toggleExportAvailability(isEnabled, targetButton = null) {
+        const button = targetButton || ui.exportCsvBtn;
+        if (!button) return;
+        button.disabled = !isEnabled;
+        button.setAttribute('aria-disabled', String(!isEnabled));
     }
 
     function exportSimulationData() {
@@ -649,9 +674,44 @@ document.addEventListener('DOMContentLoaded', () => {
         URL.revokeObjectURL(url);
     }
 
+    function exportTrainingData() {
+        if (!trainingHistory.length) return;
+
+        const headers = ['epoch', 'train_loss', 'val_loss', 'val_rmse'];
+        const rows = trainingHistory.map(entry => [
+            entry.epoch,
+            formatTrainingCsvValue(entry.train_loss),
+            formatTrainingCsvValue(entry.val_loss),
+            formatTrainingCsvValue(entry.val_rmse)
+        ].join(','));
+
+        const csvContent = [headers.join(','), ...rows].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const downloadLink = document.createElement('a');
+        const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0];
+        downloadLink.href = url;
+        downloadLink.download = `training_metrics_${timestamp}.csv`;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(url);
+    }
+
     function formatCsvNumber(value, decimals = 4) {
         const num = Number(value);
         return Number.isFinite(num) ? num.toFixed(decimals) : '';
+    }
+
+    function formatTrainingCsvValue(value) {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '';
+        const absVal = Math.abs(num);
+        if (absVal === 0) return '0';
+        if (absVal < 1e-4 || absVal >= 1e4) {
+            return num.toExponential(6);
+        }
+        return num.toFixed(6);
     }
 
     // =================================================================================
@@ -667,7 +727,22 @@ document.addEventListener('DOMContentLoaded', () => {
     socket.on('status', (data) => updateStatus(data.message, data.type));
 
     socket.on('training_update', (data) => {
-        if (!trainingChart) return;
+        const latestEntry = trainingHistory[trainingHistory.length - 1];
+        const newEntry = {
+            epoch: data.epoch,
+            train_loss: data.train_loss,
+            val_loss: data.val_loss,
+            val_rmse: data.val_rmse
+        };
+
+        if (latestEntry && latestEntry.epoch === data.epoch) {
+            trainingHistory[trainingHistory.length - 1] = newEntry;
+        } else {
+            trainingHistory.push(newEntry);
+        }
+
+        toggleExportAvailability(trainingHistory.length > 0, trainingExportButton);
+
         const progress = (data.epoch / data.total_epochs) * 100;
         const progressBar = document.getElementById('progress-bar');
         const epochCounter = document.getElementById('epoch-counter');
@@ -675,7 +750,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (epochCounter) {
             epochCounter.innerHTML = `<p class="text-gray-300 text-sm">Epoch</p><p class="text-white font-bold text-lg">${data.epoch} / ${data.total_epochs}</p>`;
         }
-        updateChartData(trainingChart, [data.epoch], [[data.train_loss], [data.val_loss], [data.val_rmse]]);
+
+        if (trainingChart) {
+            updateChartData(trainingChart, [data.epoch], [[data.train_loss], [data.val_loss], [data.val_rmse]]);
+        }
     });
 
     socket.on('training_finished', (data) => {
@@ -684,6 +762,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ui.retrainBtn.disabled = false;
             ui.retrainBtn.textContent = '重新訓練模型';
         }
+        toggleExportAvailability(trainingHistory.length > 0, trainingExportButton);
         updateStatus('Training completed successfully.', 'success');
         showView('dashboard-view');
     });
@@ -755,6 +834,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // =================================================================================
     // 初始化
     // =================================================================================
+
+    trainingExportButton?.addEventListener('click', exportTrainingData);
 
     navButtons.forEach(btn => btn.addEventListener('click', () => showView(btn.dataset.view)));
     showView('dashboard-view');
