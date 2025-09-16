@@ -70,36 +70,54 @@
             border: 1px solid rgba(148, 163, 184, 0.35);
             box-shadow: 0 16px 40px rgba(15, 23, 42, 0.55);
             opacity: 0;
-            transform: translate(-50%, 0.35rem) scale(0.98);
+            transform: scale(0.98);
             pointer-events: none;
             transition: opacity 0.2s ease, transform 0.2s ease;
             text-align: left;
             z-index: 12000;
+            --tooltip-arrow-x: 50%;
+            --tooltip-arrow-y: 50%;
         }
 
         .tooltip-panel::after {
             content: '';
             position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
             border-width: 6px;
             border-style: solid;
         }
 
         .tooltip-panel[data-visible="true"] {
             opacity: 1;
-            transform: translate(-50%, -0.35rem) scale(1);
+            transform: scale(1);
             pointer-events: auto;
         }
 
         .tooltip-panel[data-placement="top"]::after {
             top: 100%;
+            left: var(--tooltip-arrow-x);
+            transform: translateX(-50%);
             border-color: rgba(17, 24, 39, 0.95) transparent transparent transparent;
         }
 
         .tooltip-panel[data-placement="bottom"]::after {
             bottom: 100%;
+            left: var(--tooltip-arrow-x);
+            transform: translateX(-50%);
             border-color: transparent transparent rgba(17, 24, 39, 0.95) transparent;
+        }
+
+        .tooltip-panel[data-placement="left"]::after {
+            top: var(--tooltip-arrow-y);
+            right: -12px;
+            transform: translateY(-50%);
+            border-color: transparent rgba(17, 24, 39, 0.95) transparent transparent;
+        }
+
+        .tooltip-panel[data-placement="right"]::after {
+            top: var(--tooltip-arrow-y);
+            left: -12px;
+            transform: translateY(-50%);
+            border-color: transparent transparent transparent rgba(17, 24, 39, 0.95);
         }
 
         .styled-input {

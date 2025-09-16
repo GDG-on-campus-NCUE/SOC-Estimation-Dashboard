@@ -151,38 +151,58 @@ document.addEventListener('DOMContentLoaded', () => {
         const viewportHeight = window.innerHeight;
         const margin = 12;
 
-        let left = triggerRect.left + triggerRect.width / 2;
-        const halfWidth = tooltipWidth / 2;
-        if (left - halfWidth < margin) {
-            left = margin + halfWidth;
-        } else if (left + halfWidth > viewportWidth - margin) {
-            left = viewportWidth - margin - halfWidth;
-        }
-
+        const spaceLeft = triggerRect.left - margin;
+        const spaceRight = viewportWidth - triggerRect.right - margin;
         const spaceAbove = triggerRect.top - margin;
         const spaceBelow = viewportHeight - triggerRect.bottom - margin;
 
-        let placement = 'top';
+        const triggerVerticalCenter = triggerRect.top + triggerRect.height / 2;
+        const triggerHorizontalCenter = triggerRect.left + triggerRect.width / 2;
+
+        let placement = 'right';
+        let left;
         let top;
 
-        if (spaceAbove >= tooltipHeight || spaceAbove >= spaceBelow) {
-            placement = 'top';
-            top = Math.max(margin, triggerRect.top - margin - tooltipHeight);
-        } else {
+        if (spaceRight >= tooltipWidth || spaceRight >= spaceLeft) {
+            placement = 'right';
+            left = triggerRect.right + margin;
+            top = triggerVerticalCenter - tooltipHeight / 2;
+        } else if (spaceLeft >= tooltipWidth) {
+            placement = 'left';
+            left = triggerRect.left - margin - tooltipWidth;
+            top = triggerVerticalCenter - tooltipHeight / 2;
+        } else if (spaceBelow >= tooltipHeight || spaceBelow >= spaceAbove) {
             placement = 'bottom';
-            top = Math.min(viewportHeight - margin - tooltipHeight, triggerRect.bottom + margin);
+            left = triggerHorizontalCenter - tooltipWidth / 2;
+            top = triggerRect.bottom + margin;
+        } else {
+            placement = 'top';
+            left = triggerHorizontalCenter - tooltipWidth / 2;
+            top = triggerRect.top - margin - tooltipHeight;
         }
 
-        if (top < margin) {
-            top = margin;
-        }
-        if (top + tooltipHeight > viewportHeight - margin) {
-            top = Math.max(margin, viewportHeight - margin - tooltipHeight);
-        }
+        left = Math.min(Math.max(margin, left), viewportWidth - margin - tooltipWidth);
+        top = Math.min(Math.max(margin, top), viewportHeight - margin - tooltipHeight);
 
         panel.dataset.placement = placement;
         panel.style.left = `${left}px`;
         panel.style.top = `${top}px`;
+
+        if (placement === 'left' || placement === 'right') {
+            const arrowOffset = triggerVerticalCenter - top;
+            const minOffset = Math.min(tooltipHeight / 2, 12);
+            const maxOffset = tooltipHeight - minOffset;
+            const clampedOffset = Math.min(Math.max(arrowOffset, minOffset), maxOffset);
+            panel.style.setProperty('--tooltip-arrow-y', `${clampedOffset}px`);
+            panel.style.removeProperty('--tooltip-arrow-x');
+        } else {
+            const arrowOffset = triggerHorizontalCenter - left;
+            const minOffset = Math.min(tooltipWidth / 2, 12);
+            const maxOffset = tooltipWidth - minOffset;
+            const clampedOffset = Math.min(Math.max(arrowOffset, minOffset), maxOffset);
+            panel.style.setProperty('--tooltip-arrow-x', `${clampedOffset}px`);
+            panel.style.removeProperty('--tooltip-arrow-y');
+        }
     }
 
     function refreshTooltipPosition() {
