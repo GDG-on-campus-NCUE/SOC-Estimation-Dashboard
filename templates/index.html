@@ -125,12 +125,29 @@
         }
 
         #simulation-chart-scroll {
-            overflow: hidden;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 0.75rem;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(59, 130, 246, 0.45) transparent;
         }
 
         #simulation-chart-scroll::-webkit-scrollbar {
-            height: 0;
-            width: 0;
+            height: 8px;
+        }
+
+        #simulation-chart-scroll::-webkit-scrollbar-track {
+            background: rgba(30, 41, 59, 0.6);
+            border-radius: 9999px;
+        }
+
+        #simulation-chart-scroll::-webkit-scrollbar-thumb {
+            background: rgba(59, 130, 246, 0.5);
+            border-radius: 9999px;
+        }
+
+        #simulation-chart-scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(59, 130, 246, 0.8);
         }
 
         .legend-toggle-button {
@@ -277,7 +294,7 @@
             </div>
 
             <div class="glassmorphism rounded-2xl p-6 h-[60vh] flex flex-col">
-                <div class="flex items-center justify-between gap-4 mb-4">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
                     <div class="flex items-center gap-3">
                         <h3 class="text-xl font-semibold text-white">損失與誤差趨勢</h3>
                         <div class="relative group inline-flex tooltip-group">
@@ -287,6 +304,9 @@
                             </div>
                         </div>
                     </div>
+                    <button id="export-training-csv-btn" class="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                        匯出訓練紀錄 (CSV)
+                    </button>
                 </div>
                 <div class="flex-1">
                     <canvas id="training-chart"></canvas>
