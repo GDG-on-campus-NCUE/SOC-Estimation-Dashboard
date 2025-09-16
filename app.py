@@ -31,8 +31,23 @@ is_simulating = threading.Event()
 soc_estimator = None
 
 SIMULATION_STATE = {
-    'speed_factor': 1.0, 'v_noise': 0.0, 'c_noise': 0.0, 't_noise': 0.0
+    'speed_multiplier': 1.0,
+    'v_noise': 0.0,
+    'c_noise': 0.0,
+    't_noise': 0.0,
+    'update_interval': 0.3,
+    'batch_size': 4,
 }
+
+
+def recalculate_simulation_timing():
+    """根據速度倍率重新計算更新頻率與批次大小。"""
+    multiplier = max(0.1, float(SIMULATION_STATE.get('speed_multiplier', 1.0)))
+    SIMULATION_STATE['update_interval'] = max(0.05, 0.35 / multiplier)
+    SIMULATION_STATE['batch_size'] = max(1, int(round(4 * multiplier)))
+
+
+recalculate_simulation_timing()
 
 class SOCEstimator:
     def __init__(self, weights_path, config_path, scaler_path):
@@ -79,6 +94,7 @@ def handle_start_simulation():
     global simulation_thread
     if not soc_estimator:
         emit('status', {'message': 'Model not available. Please train first.', 'type': 'error'})
+        emit('simulation_error', {'message': '尚未載入模型，請先完成訓練。'})
         return
     if is_simulating.is_set(): return
     is_simulating.set()
@@ -92,7 +108,8 @@ def handle_stop_simulation():
 
 @socketio.on('update_simulation_params')
 def handle_update_params(params):
-    SIMULATION_STATE['speed_factor'] = 2.1 - float(params.get('speed', 1.0))
+    SIMULATION_STATE['speed_multiplier'] = max(0.1, float(params.get('speed', 1.0)))
+    recalculate_simulation_timing()
     SIMULATION_STATE['v_noise'] = float(params.get('v_noise', 0.0))
     SIMULATION_STATE['c_noise'] = float(params.get('c_noise', 0.0))
     SIMULATION_STATE['t_noise'] = float(params.get('t_noise', 0.0))
@@ -182,42 +199,92 @@ def run_training_task(params):
 
 def run_simulation_task():
     global soc_estimator
-    if not soc_estimator: return
-    
-    socketio.emit('status', {'message': 'Simulation running...', 'type': 'simulating'})
-    vct_sim_data, _ = load_and_reshape_data('data/CASE_4_Test_VCT_transposed.csv', 'data/CASE_4_Test_SOC_transposed.csv')
-    
-    history = []
-    index = 0
-    update_batch = []
-    batch_size = 5
-    
-    while is_simulating.is_set():
-        original_row = vct_sim_data[index % len(vct_sim_data)]
-        noisy_row = [
-            original_row[0] + SIMULATION_STATE['v_noise'] * random.uniform(-0.5, 0.5),
-            original_row[1] + SIMULATION_STATE['c_noise'] * random.uniform(-0.5, 0.5),
-            original_row[2] + SIMULATION_STATE['t_noise'] * random.uniform(-0.5, 0.5),
-        ]
-        
-        history.append(noisy_row)
-        if len(history) > soc_estimator.window_size:
-            history.pop(0)
+    if not soc_estimator:
+        socketio.emit('simulation_error', {'message': '尚未載入模型，請先完成訓練。'})
+        return
 
-        predicted_soc = soc_estimator.predict(np.array(history))
-        
-        update_batch.append({
-            'index': index, 'v': noisy_row[0], 'c': noisy_row[1], 't': noisy_row[2], 'soc': predicted_soc
+    socketio.emit('status', {'message': 'Simulation running...', 'type': 'simulating'})
+
+    try:
+        vct_sim_data, soc_sim_data = load_and_reshape_data(
+            'data/CASE_4_Test_VCT_transposed.csv', 'data/CASE_4_Test_SOC_transposed.csv'
+        )
+        soc_series = soc_sim_data.flatten()
+        total_points = len(vct_sim_data)
+
+        socketio.emit('simulation_started', {
+            'total_points': int(total_points),
+            'window_size': int(soc_estimator.window_size),
+            'speed_multiplier': SIMULATION_STATE['speed_multiplier'],
+            'update_interval': SIMULATION_STATE['update_interval'],
+            'batch_size': SIMULATION_STATE['batch_size'],
         })
-        
-        if len(update_batch) >= batch_size or SIMULATION_STATE['speed_factor'] > 0.5:
-            socketio.emit('simulation_update', {'points': update_batch})
-            update_batch = []
-        
-        index += 1
-        socketio.sleep(SIMULATION_STATE['speed_factor'] / batch_size) 
-    
-    socketio.emit('status', {'message': 'Simulation stopped.', 'type': 'info'})
+
+        history = []
+        index = 0
+        update_batch = []
+        last_emit_time = time.time()
+
+        while is_simulating.is_set():
+            row_idx = index % total_points
+            original_row = vct_sim_data[row_idx]
+            noisy_row = [
+                original_row[0] + SIMULATION_STATE['v_noise'] * random.uniform(-0.5, 0.5),
+                original_row[1] + SIMULATION_STATE['c_noise'] * random.uniform(-0.5, 0.5),
+                original_row[2] + SIMULATION_STATE['t_noise'] * random.uniform(-0.5, 0.5),
+            ]
+
+            history.append(noisy_row)
+            if len(history) > soc_estimator.window_size:
+                history.pop(0)
+
+            predicted_soc = soc_estimator.predict(np.array(history))
+            actual_soc = float(soc_series[row_idx])
+            error = predicted_soc - actual_soc
+
+            update_batch.append({
+                'index': index,
+                'v': noisy_row[0],
+                'c': noisy_row[1],
+                't': noisy_row[2],
+                'soc': predicted_soc,
+                'actual_soc': actual_soc,
+                'error': error,
+            })
+
+            now = time.time()
+            emit_due_to_size = len(update_batch) >= SIMULATION_STATE['batch_size']
+            emit_due_to_time = now - last_emit_time >= SIMULATION_STATE['update_interval']
+
+            if emit_due_to_size or emit_due_to_time:
+                socketio.emit('simulation_update', {
+                    'points': update_batch,
+                    'server_ts': now,
+                    'latency_hint_ms': int((now - last_emit_time) * 1000),
+                    'speed_multiplier': SIMULATION_STATE['speed_multiplier'],
+                })
+                update_batch = []
+                last_emit_time = now
+
+            index += 1
+            sleep_duration = SIMULATION_STATE['update_interval'] / max(SIMULATION_STATE['batch_size'], 1)
+            socketio.sleep(max(0.01, sleep_duration))
+
+        if update_batch:
+            now = time.time()
+            socketio.emit('simulation_update', {
+                'points': update_batch,
+                'server_ts': now,
+                'latency_hint_ms': int((now - last_emit_time) * 1000),
+                'speed_multiplier': SIMULATION_STATE['speed_multiplier'],
+            })
+
+    except Exception as exc:
+        socketio.emit('simulation_error', {'message': f'模擬程序發生錯誤：{exc}'})
+    finally:
+        is_simulating.clear()
+        socketio.emit('status', {'message': 'Simulation stopped.', 'type': 'info'})
+        socketio.emit('simulation_stopped', {'timestamp': time.time()})
 
 if __name__ == '__main__':
     weights_p, config_p, scaler_p = 'saved_model/soc_model_weights.pth', 'saved_model/model_config.json', 'saved_model/x_scaler.pkl'
