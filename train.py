@@ -1,222 +1,159 @@
-import os
-import json
+# bpnn_train_test.py
+import time
 import joblib
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from tqdm import tqdm
+
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.neural_network import MLPRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei']  # 中文字體
+plt.rcParams['axes.unicode_minus'] = False  # 負號顯示
+# ======================
+# 0) 參數
+# ======================
+DATA_CSV = "battery_data.csv"   # 輸入的電池資料 (需含 Voltage, Current, Temperature, SOC)
+MODEL_PKL = "bpnn_model.pkl"
+SCALER_PKL = "bpnn_scaler.pkl"
+PRED_CSV  = "bpnn_test_predictions.csv"
+RANDOM_SEED = 42
 
-from data_utils import load_and_reshape_data, create_time_series_features, normalize_data
-from model import create_bp_model
+start = time.time()
 
-# --- 模型超參數配置 (對應規格書表 3.1) ---
-class TrainingConfig:
-    WINDOW_SIZE = 5
-    HIDDEN_LAYERS = [64, 32]
-    LEARNING_RATE = 0.001
-    BATCH_SIZE = 64
-    EPOCHS = 128
-    VALIDATION_SPLIT = 0.2 # 從訓練資料中切分 20% 作為驗證集
-    
-    # 檔案路徑設定
-    TRAIN_VCT_PATH = 'data/CASE_4_Train_VCT_transposed.csv'
-    TRAIN_SOC_PATH = 'data/CASE_4_Train_SOC_transposed.csv'
-    TEST_VCT_PATH = 'data/CASE_4_Test_VCT_transposed.csv'
-    TEST_SOC_PATH = 'data/CASE_4_Test_SOC_transposed.csv'
-    
-    # 模型儲存路徑
-    MODEL_SAVE_DIR = 'saved_model'
-    MODEL_WEIGHTS_PATH = os.path.join(MODEL_SAVE_DIR, 'soc_model_weights.pth')
-    MODEL_CONFIG_PATH = os.path.join(MODEL_SAVE_DIR, 'model_config.json')
-    SCALER_PATH = os.path.join(MODEL_SAVE_DIR, 'x_scaler.pkl')
-    # 監看結果圖表的儲存路徑
-    MONITORING_PLOT_PATH = os.path.join(MODEL_SAVE_DIR, 'training_monitoring.png')
+# ======================
+# 1) 讀資料
+# ======================
+df = pd.read_csv(DATA_CSV)
 
-def main():
-    """主訓練流程"""
-    cfg = TrainingConfig()
-    
-    # <--- GPU 修改 1: 偵測並設定 device ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"=========================================")
-    print(f"      將使用 '{device}' 裝置進行訓練")
-    print(f"=========================================")
+# 確認必要欄位
+required = ["Voltage", "Current", "Temperature", "SOC"]
+missing = [c for c in required if c not in df.columns]
+if missing:
+    raise ValueError(f"CSV 缺少欄位：{missing}，請確認檔案內容。")
 
-    os.makedirs(cfg.MODEL_SAVE_DIR, exist_ok=True)
+df = df.dropna(subset=required).copy()
 
-    # --- 1. 資料管線 ---
-    # 載入完整的訓練和測試資料
-    print("正在載入並處理資料...")
-    train_vct_full, train_soc_full = load_and_reshape_data(cfg.TRAIN_VCT_PATH, cfg.TRAIN_SOC_PATH)
-    test_vct, test_soc = load_and_reshape_data(cfg.TEST_VCT_PATH, cfg.TEST_SOC_PATH)
+# 特徵 (輸入)
+X = df[["Voltage", "Current", "Temperature"]].values
+# 標籤 (輸出)
+y = df["SOC"].values
 
-    # 建立時間序列特徵
-    X_full, y_full = create_time_series_features(train_vct_full, train_soc_full, cfg.WINDOW_SIZE)
-    X_test, y_test = create_time_series_features(test_vct, test_soc, cfg.WINDOW_SIZE)
-    
-    # <--- 將完整訓練集切分為新的訓練集和驗證集 ---
-    print(f"將訓練資料以 {1-cfg.VALIDATION_SPLIT:.0%}:{cfg.VALIDATION_SPLIT:.0%} 的比例切分為訓練集與驗證集...")
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_full, y_full, test_size=cfg.VALIDATION_SPLIT, random_state=42, shuffle=True
-    )
-    
-    # 正規化: Scaler 只在新的、較小的訓練集上 fit
-    X_train_s, X_val_s, y_train_s, y_val_s, x_scaler = normalize_data(X_train, X_val, y_train, y_val)
-    # 測試集也用同一個 scaler 轉換
-    X_test_s = x_scaler.transform(X_test)
-    y_test_s = y_test / 100.0
+# ======================
+# 2) 8:2 切分
+# ======================
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=RANDOM_SEED, shuffle=True
+)
 
-    # --- 2. 轉換為 PyTorch Tensors 並建立 DataLoader ---
-    X_train_t = torch.tensor(X_train_s, dtype=torch.float32)
-    y_train_t = torch.tensor(y_train_s, dtype=torch.float32)
-    X_val_t = torch.tensor(X_val_s, dtype=torch.float32)
-    y_val_t = torch.tensor(y_val_s, dtype=torch.float32)
-    X_test_t = torch.tensor(X_test_s, dtype=torch.float32)
-    y_test_t = torch.tensor(y_test_s, dtype=torch.float32)
+# ======================
+# 3) 標準化
+# ======================
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s  = scaler.transform(X_test)
 
-    train_dataset = TensorDataset(X_train_t, y_train_t)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.BATCH_SIZE, shuffle=True)
-    val_dataset = TensorDataset(X_val_t, y_val_t)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.BATCH_SIZE, shuffle=False)
+# ======================
+# 4) BPNN (MLPRegressor + logistic)
+# ======================
+bpnn = MLPRegressor(
+    hidden_layer_sizes=(64, 64, 32),  # 可調
+    activation="logistic",            # sigmoid
+    solver="adam",
+    learning_rate_init=1e-3,
+    max_iter=3000,
+    early_stopping=True,
+    n_iter_no_change=30,
+    random_state=RANDOM_SEED,
+    verbose=False
+)
 
-    # --- 3. 建立模型 ---
-    input_size = X_train.shape[1]
-    output_size = 1
-    layer_config = [input_size] + cfg.HIDDEN_LAYERS + [output_size]
-    
-    model = create_bp_model(layer_config)
-    # <--- GPU 修改 2: 將模型移動到指定的 device ---
-    model.to(device)
-    
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=cfg.LEARNING_RATE)
+bpnn.fit(X_train_s, y_train)
 
-    # <--- 用於記錄監看數據的列表 ---
-    history = {
-        'epoch': [], 'train_loss': [], 'val_loss': [], 'val_rmse': [], 'val_mae': []
-    }
+# ======================
+# 5) 評估
+# ======================
+def eval_and_print(name, y_true, y_pred):
+    mse  = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    mae  = mean_absolute_error(y_true, y_pred)
+    r2   = r2_score(y_true, y_pred)
+    print(f"\n[{name}]")
+    print(f"- MSE : {mse:.6f}")
+    print(f"- RMSE: {rmse:.6f}")
+    print(f"- MAE : {mae:.6f}")
+    print(f"- R²  : {r2:.6f}")
+    return mse, rmse, mae, r2
 
-    # --- 4. 訓練迴圈 ---
-    print("\n--- 開始模型訓練 ---")
-    # <--- 使用 tqdm 建立進度條 ---
-    for epoch in tqdm(range(cfg.EPOCHS), desc="整體訓練進度"):
-        # --- 訓練模式 ---
-        model.train()
-        batch_losses = []
-        for batch_X, batch_y in train_loader:
-            # <--- GPU 修改 3.1: 將訓練資料批次移動到 device ---
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+y_pred_train = bpnn.predict(X_train_s)
+y_pred_test  = bpnn.predict(X_test_s)
 
-            optimizer.zero_grad()
-            outputs = model(batch_X)
-            loss = criterion(outputs, batch_y)
-            loss.backward()
-            optimizer.step()
-            batch_losses.append(loss.item())
-        epoch_train_loss = np.mean(batch_losses)
-        
-        # --- 驗證模式 ---
-        model.eval()
-        val_batch_losses = []
-        all_val_preds = []
-        all_val_true = []
-        with torch.no_grad():
-            for batch_X_val, batch_y_val in val_loader:
-                # <--- GPU 修改 3.2: 將驗證資料批次移動到 device ---
-                batch_X_val, batch_y_val = batch_X_val.to(device), batch_y_val.to(device)
+eval_and_print("訓練集", y_train, y_pred_train)
+eval_and_print("測試集",  y_test,  y_pred_test)
 
-                val_outputs = model(batch_X_val)
-                val_loss = criterion(val_outputs, batch_y_val)
-                val_batch_losses.append(val_loss.item())
+# ======================
+# 6) 匯出測試集預測 CSV
+# ======================
+pred_df = pd.DataFrame(X_test, columns=["Voltage", "Current", "Temperature"])
+pred_df["Actual_SOC"]     = y_test
+pred_df["Predicted_SOC"]  = y_pred_test
+pred_df["Error"]          = pred_df["Predicted_SOC"] - pred_df["Actual_SOC"]
+pred_df["AbsError"]       = pred_df["Error"].abs()
+pred_df.to_csv(PRED_CSV, index=False)
+print(f"\n✅ 已輸出測試集預測：{PRED_CSV}")
 
-                # <--- GPU 修改 3.3: 將 GPU tensor 移回 CPU 才能轉換為 numpy ---
-                all_val_preds.append(val_outputs.cpu().numpy())
-                all_val_true.append(batch_y_val.cpu().numpy())
-        
-        epoch_val_loss = np.mean(val_batch_losses)
-        
-        # 每 10 個 epoch 記錄一次數據並印出
-        if (epoch + 1) % 10 == 0:
-            # 反正規化以計算真實世界的誤差
-            val_preds_rescaled = np.concatenate(all_val_preds) * 100
-            val_true_rescaled = np.concatenate(all_val_true) * 100
-            
-            val_rmse = np.sqrt(np.mean((val_preds_rescaled - val_true_rescaled)**2))
-            val_mae = np.mean(np.abs(val_preds_rescaled - val_true_rescaled))
-            
-            history['epoch'].append(epoch + 1)
-            history['train_loss'].append(epoch_train_loss)
-            history['val_loss'].append(epoch_val_loss)
-            history['val_rmse'].append(val_rmse)
-            history['val_mae'].append(val_mae)
+# ======================
+# 7) 存模型與標準化器
+# ======================
+joblib.dump(bpnn, MODEL_PKL)
+joblib.dump(scaler, SCALER_PKL)
+print(f"✅ 已儲存模型：{MODEL_PKL}")
+print(f"✅ 已儲存Scaler：{SCALER_PKL}")
 
-            tqdm.write(f"Epoch [{epoch+1}/{cfg.EPOCHS}] | "
-                       f"Train Loss: {epoch_train_loss:.6f} | "
-                       f"Val Loss: {epoch_val_loss:.6f} | "
-                       f"Val RMSE: {val_rmse:.4f}% | "
-                       f"Val MAE: {val_mae:.4f}%")
+# ======================
+# 8) 繪圖
+# ======================
 
-    print("--- 訓練完成 ---\n")
+# (a) Actual vs Predicted
+plt.figure(figsize=(8, 6))
+plt.scatter(y_test, y_pred_test, alpha=0.5, label="Test")
+minv = min(y_test.min(), y_pred_test.min(), 0.0)
+maxv = max(y_test.max(), y_pred_test.max(), 100.0)  # SOC 通常 0~100
+plt.plot([minv, maxv], [minv, maxv], 'r--', label="Ideal")
+plt.xlabel("Actual SOC")
+plt.ylabel("Predicted SOC")
+plt.title("BPNN (MLP, logistic) - Actual vs Predicted (Test)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
 
-    # --- 5. 在最終的「測試集」上評估模型 ---
-    model.eval()
-    with torch.no_grad():
-        # <--- GPU 修改 3.4: 將整個測試集移動到 device 進行預測 ---
-        X_test_t = X_test_t.to(device)
-        
-        predictions = model(X_test_t)
-        
-        # <--- GPU 修改 3.5: 將預測結果移回 CPU 才能轉換為 numpy ---
-        predictions_rescaled = predictions.cpu().numpy() * 100
-        y_test_rescaled = y_test_t.numpy() * 100 # y_test_t 原本就在 CPU，不需改動
-        
-        rmse = np.sqrt(np.mean((predictions_rescaled - y_test_rescaled)**2))
-        mae = np.mean(np.abs(predictions_rescaled - y_test_rescaled))
+# (b) Loss Curve
+if hasattr(bpnn, "loss_curve_"):
+    plt.figure(figsize=(8, 4))
+    plt.plot(bpnn.loss_curve_)
+    plt.xlabel("Epoch")
+    plt.ylabel("Training Loss")
+    plt.title("BPNN Training Loss Curve")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
-        print("--- 最終模型評估結果 (在獨立測試集上) ---")
-        print(f"均方根誤差 (RMSE): {rmse:.4f} %")
-        print(f"平均絕對誤差 (MAE): {mae:.4f} %")
-        print("-----------------------------------------")
+# (c) SOC 曲線圖 (實際 vs 預測)
+plt.figure(figsize=(10, 5))
+num_cycles = 1  # 假設 6 個循環
+x_axis = np.linspace(0, num_cycles, len(y_test))
 
-    # <--- 繪製並儲存監看圖表 ---
-    print(f"正在繪製監看圖表並儲存至 {cfg.MONITORING_PLOT_PATH}...")
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-    fig.suptitle('訓練過程監看圖表', fontsize=16)
+plt.plot(x_axis, y_test, label="實際值", color="blue", linewidth=1)
+plt.plot(x_axis, y_pred_test, label="預測值", color="red", linestyle="--", linewidth=1)
 
-    # 圖一：訓練損失 vs 驗證損失
-    ax1.plot(history['epoch'], history['train_loss'], 'b-o', label='訓練損失 (Training Loss)')
-    ax1.plot(history['epoch'], history['val_loss'], 'r-o', label='驗證損失 (Validation Loss)')
-    ax1.set_yscale('log')
-    ax1.set_title('損失函數變化曲線 (Loss Curve)')
-    ax1.set_ylabel('損失 (MSE, log scale)')
-    ax1.legend()
-    ax1.grid(True)
+plt.xlabel("循環次數")
+plt.ylabel("SOC (%)")
+plt.title("實際值 vs 預測值 曲線圖 (BPNN)")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
 
-    # 圖二：驗證集的 RMSE 和 MAE
-    ax2.plot(history['epoch'], history['val_rmse'], 'g-s', label='均方根誤差 (RMSE %)')
-    ax2.plot(history['epoch'], history['val_mae'], 'm-^', label='平均絕對誤差 (MAE %)')
-    ax2.set_title('驗證集效能指標 (Validation Metrics)')
-    ax2.set_xlabel('訓練週期 (Epochs)')
-    ax2.set_ylabel('誤差百分比 (%)')
-    ax2.legend()
-    ax2.grid(True)
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(cfg.MONITORING_PLOT_PATH)
-    # plt.show() # 在容器中執行時，通常不需要互動式顯示圖表
-
-    # --- 6. 儲存模型產物 ---
-    print(f"\n正在儲存模型至 '{cfg.MODEL_SAVE_DIR}' 資料夾...")
-    torch.save(model.state_dict(), cfg.MODEL_WEIGHTS_PATH)
-    with open(cfg.MODEL_CONFIG_PATH, 'w') as f:
-        json.dump(layer_config, f)
-    joblib.dump(x_scaler, cfg.SCALER_PATH)
-    print("模型儲存成功！")
-
-
-if __name__ == '__main__':
-    main()
+print(f"\n⏱️ 執行時間：{time.time() - start:.2f} 秒")
